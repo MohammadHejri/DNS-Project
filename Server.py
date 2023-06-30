@@ -21,6 +21,13 @@ s_private_key = None
 s_public_key = None
 BUFFER_SIZE = 65536
 
+listening_clients = dict()
+users_cipher = dict()
+
+
+def generate_seq_num():
+    return random.randint(1, 10 ** 8)
+
 
 def send_msg(conn, msg):
     conn.sendall(msg)
@@ -76,17 +83,18 @@ def login(request, session_cipher, conn, addr):
         send_msg(conn, Encryption.sign_and_encrypt(data_to_send, s_private_key, session_cipher))
         response = from_json(Encryption.symmetric_decrypt(cipher_text=recv_msg(conn), cipher=session_cipher))
         is_valid = Encryption.check_signature(response, clients_public_keys.get(username)) \
-                and response['data']['server-nonce'] == data_to_send['server-nonce']
+                   and response['data']['server-nonce'] == data_to_send['server-nonce']
         if is_valid:
             token = generate_token()
             data_to_send = {'result': 'success', 'nonce': response['data']['nonce'], 'token': token}
             with lock:
                 token_to_user[token] = username
                 authorized_users[username] = conn
+                users_cipher[username] = session_cipher
         else:
             data_to_send = {'result': 'fail', 'nonce': response['data']['nonce']}
         send_msg(conn, Encryption.sign_and_encrypt(data_to_send, s_private_key, session_cipher))
-        print(f"{username}'s login" + ("was successful" if is_valid else "failed"))
+        print(f"{username}'s login " + ("was successful" if is_valid else "failed"))
         return is_valid
     print("Login failed")
     return False
@@ -105,6 +113,7 @@ def register(request, session_cipher, conn, addr):
                 with lock:
                     token_to_user[token] = username
                     authorized_users[username] = conn
+                    users_cipher[username] = session_cipher
                 data_to_send = {'result': 'success', 'nonce': nonce, 'token': token}
                 send_msg(conn, Encryption.sign_and_encrypt(data_to_send, s_private_key, session_cipher))
                 clients_public_keys[username] = public_key
@@ -120,6 +129,57 @@ def register(request, session_cipher, conn, addr):
     except Exception as e:
         print(e)
 
+
+def send_chat_message(request, session_cipher, conn, addr):
+    global s_public_key, s_private_key, clients_public_keys
+    token = request['data']['token']
+    nonce = request['data']['nonce']
+    receiver = request['data']['receiver']
+    sender_key = clients_public_keys[token_to_user[token]]
+    if Encryption.check_signature(request, sender_key):
+        server_seq_num = generate_seq_num()
+        data_to_send = {'receiver_key': Encryption.get_serialized_key(clients_public_keys.get(receiver)).decode('latin-1'),
+                        'nonce': nonce, 'seq_num': str(server_seq_num)}
+        msg = Encryption.sign_and_encrypt(data_to_send, s_private_key, session_cipher)
+        send_msg(conn, msg)
+        while True:
+            response = json.loads(
+                Encryption.symmetric_decrypt(cipher_text=conn.recv(BUFFER_SIZE), cipher=session_cipher).decode('latin-1'))
+            response_cmd = response['data']['cmd']
+            if response_cmd == "quitchat":
+                quit_chat()
+                break
+            seq_num = int(response['data']['seq_num'])
+            if Encryption.check_signature(request, sender_key):
+
+                if seq_num == server_seq_num:
+                    data_to_send = {
+                        "cipher_text": response['data']['cipher_text'],
+                        "chat_key_par_cipher": response['data']['chat_key_par_cipher'],
+                    }
+                    msg = Encryption.sign_and_encrypt(data_to_send, s_private_key, users_cipher[receiver])
+                    listening_clients[receiver][0].sendall(msg)
+                    server_seq_num += 1
+
+
+def quit_chat():
+    return
+
+
+def handle_listen(args, c, a):
+    token = args['token']
+    username = token_to_user[token]
+    data_to_send = {
+        "nonce": generate_nonce(8)
+    }
+    c.sendall(Encryption.sign_and_encrypt(data_to_send, s_private_key, users_cipher[username]))
+    response = json.loads(
+        Encryption.symmetric_decrypt(cipher_text=c.recv(BUFFER_SIZE), cipher=users_cipher[username]).decode('latin-1'))
+    if Encryption.check_signature(response, clients_public_keys[username]):
+        with lock:
+            listening_clients[username] = (c, a)
+        print("listen handled")
+    return
 
 
 def show_online_users(request, session_cipher, conn, addr):
@@ -142,6 +202,7 @@ def logout(request):
             with lock:
                 del token_to_user[token]
                 del authorized_users[username]
+                del users_cipher[username]
             print(username + " logged out")
             return True
     return False
@@ -164,6 +225,8 @@ def run_menu(conn, addr, session_iv, session_key):
             show_online_users(request, session_cipher, conn, addr)
         elif cmd == 'logout':
             res = logout(request)
+        elif cmd == 'chat':
+            send_chat_message(request, session_cipher, conn, addr)
 
         else:
             response = json.dumps("{'resp_type':'FAIL','resp':'Invalid command'}").encode('latin-1')
@@ -180,12 +243,16 @@ def handle_connection(conn, addr):
                 for (username, user_conn) in authorized_users.items():
                     if user_conn == conn:
                         del authorized_users[username]
+                        del users_cipher[username]
             return
         try:
             data = from_json(Encryption.asymmetric_decrypt(msg, s_private_key))
             if data['cmd'] == 'handshake':
                 session_key, session_iv, session_cipher = handshake(conn, addr, data)
                 run_menu(conn, addr, session_iv, session_key)
+            elif data['cmd'] == 'listen':
+                handle_listen(data, conn, addr)
+                break
         except Exception as e:
             print(f"Error: {e}")
             return

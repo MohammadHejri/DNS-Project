@@ -5,15 +5,16 @@ import Encryption
 import json
 import threading
 import os
+from cryptography.hazmat.primitives import serialization
 
 SERVER_ADDR = ('127.0.0.1', 2232)
 username = ""
 password = ""
 BUFFER_SIZE = 65536
-server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock = None
 
-chats = {}
+inbox = []
 
 # Encryption keys
 token = None
@@ -34,9 +35,19 @@ logged_in_menu = [
     ("Logout", "Logout from the account"),
     ("Online-Users", "Show online users"),
     ("Chat", "Chat with an online user"),
+    ("Inbox", "See received messages"),
 ]
 
 logged_in = False
+
+
+def get_chat_message():
+    try:
+        msg = listen_socket.recv(BUFFER_SIZE)
+        return msg
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
 
 def send_msg(msg):
@@ -96,7 +107,9 @@ def register():
         else:
             print("Passwords do not match, try again...")
     try:
-        public_key, private_key = Encryption.generate_keys(size=1024, password=password)
+        public_key, private_key = Encryption.generate_keys(size=4096, password=password)
+        # public_key, private_key = Encryption.generate_keys(size=4096, public_name=username + "pub",
+        #                                                    private_name=username + "priv", password=password)
         print("Keys generated successfully")
         data_to_send = {
             "cmd": "register",
@@ -131,7 +144,7 @@ def login():
             except Exception as e:
                 return False, "Wrong password"
         else:
-            public_key, private_key = Encryption.generate_keys(size=1024, password=password)
+            public_key, private_key = Encryption.generate_keys(size=4096, password=password)
         data_to_send = {
             "cmd": "login",
             "username": username,
@@ -202,6 +215,93 @@ def show_menu(commands):
         print(f"{i + 1}) [{command[0]}]: {command[1]}")
 
 
+def start_chat():
+    receiver = input("Please insert the receiver username: ")
+    data_to_send = {
+        "cmd": "chat",
+        "token": token,
+        "receiver": receiver,
+        "nonce": generate_nonce(8),
+    }
+    send_msg(Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher))
+    response = from_json(Encryption.symmetric_decrypt(cipher_text=recv_msg(), cipher=session_cipher))
+    if Encryption.check_signature(response, server_public_key) \
+            and Encryption.check_nonce(response, data_to_send['nonce']):
+        seq_num = int(response['data']['seq_num'])
+        receiver_key = serialization.load_pem_public_key(response['data']['receiver_key'].encode('latin-1'))
+        text_message = ''
+        while True:
+            text_message = input("please input your message: ")
+            if text_message == "exit":
+                data_to_send = {
+                    "cmd": "quitchat",
+                }
+                send_msg(Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher))
+                break
+            chat_key, chat_iv, chat_cipher = Encryption.symmetric_key()
+            txt_msg = {
+                "text": text_message,
+            }
+            txt_msg_cipher = Encryption.symmetric_encrypt(chat_cipher, json.dumps(txt_msg).encode('latin-1'))
+            chat_key_par = {
+                "chat_iv": chat_iv.decode('latin-1'),
+                "chat_key": chat_key.decode('latin-1'),
+            }
+            chat_key_par_cipher = Encryption.asymmetric_encrypt(json.dumps(chat_key_par).encode('latin-1'), receiver_key)
+            data_to_send = {
+                "cmd": "continue",
+                "seq_num": str(seq_num),
+                "cipher_text": txt_msg_cipher.decode('latin-1'),
+                "chat_key_par_cipher": chat_key_par_cipher.decode('latin-1')
+            }
+            send_msg(Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher))
+            seq_num += 1
+        print("chat closed!")
+        return
+    print("invalid server!")
+    return
+
+
+def add_msg_to_inbox(response):
+    response = json.loads(Encryption.symmetric_decrypt(cipher_text=response, cipher=session_cipher).decode('latin-1'))
+    if Encryption.check_signature(response, server_public_key):
+        chat_key_par_cipher = response['data']['chat_key_par_cipher'].encode('latin-1')
+        chat_key_par_cipher = from_json(Encryption.asymmetric_decrypt(chat_key_par_cipher, private_key))
+
+        chat_iv = chat_key_par_cipher['chat_iv'].encode('latin-1')
+        chat_key = chat_key_par_cipher['chat_key'].encode('latin-1')
+        chat_cipher = Encryption.get_cipher_from_key(chat_key, chat_iv)
+
+        cipher_text = response['data']['cipher_text'].encode('latin-1')
+        msg_text = from_json(Encryption.symmetric_decrypt(cipher=chat_cipher, cipher_text=cipher_text))
+        inbox.append(msg_text['text'])
+
+
+def listen():
+    data_to_send = {
+        "token": token,
+        "cmd": "listen",
+    }
+    msg = Encryption.asymmetric_encrypt(data=json.dumps(data_to_send).encode('latin-1'), key=server_public_key)
+    listen_socket.sendall(msg)
+    response = json.loads(
+        Encryption.symmetric_decrypt(cipher_text=listen_socket.recv(BUFFER_SIZE), cipher=session_cipher).decode('latin-1'))
+    if Encryption.check_signature(response, server_public_key):
+        data_to_send = {
+            "token": token,
+            "nonce": response['data']['nonce']
+        }
+        msg = Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher)
+        listen_socket.sendall(msg)
+
+    while True:
+        try:
+            response = get_chat_message()
+            add_msg_to_inbox(response)
+        except Exception as e:
+            print("waiting")
+
+
 def run_client_menu():
     global logged_in
     while True:
@@ -213,6 +313,10 @@ def run_client_menu():
                 logged_in = False
             elif command in ["2", "Online-Users"]:
                 show_online_users()
+            elif command in ["3", "Chat"]:
+                start_chat()
+            elif command in ["4", "Inbox"]:
+                print(inbox)
             else:
                 print("Invalid command!")
                 continue
@@ -224,11 +328,19 @@ def run_client_menu():
                 print(message)
                 if res:
                     logged_in = True
+                    listen_socket.connect(('127.0.0.1', 2232))
+                    t = threading.Thread(target=listen, args=())
+                    t.daemon = True
+                    t.start()
             elif command in ["2", "Login"]:
                 res, message = login()
                 print(message)
                 if res:
                     logged_in = True
+                    listen_socket.connect(('127.0.0.1', 2232))
+                    t = threading.Thread(target=listen, args=())
+                    t.daemon = True
+                    t.start()
             else:
                 print("Invalid command!")
                 continue

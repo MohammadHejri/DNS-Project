@@ -125,22 +125,6 @@ def check_signature(packet, public_key):
         return False
 
 
-def check_signature2(data, signature, public_key):
-    try:
-        public_key.verify(
-            signature,
-            data,
-            padding.PSS(
-                mgf=padding.MGF1(hashes.SHA256()),
-                salt_length=padding.PSS.MAX_LENGTH
-            ),
-            hashes.SHA256()
-        )
-        return True
-    except:
-        return False
-
-
 def read_publickey_from_file(path):
     with open(path, "rb") as key_file:
         public_key = serialization.load_pem_public_key(

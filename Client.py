@@ -6,12 +6,12 @@ import json
 import threading
 import os
 
-HOST = '127.0.0.1'
+SERVER_ADDR = ('127.0.0.1', 2232)
 username = ""
 password = ""
 BUFFER_SIZE = 65536
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock = None
 
 chats = {}
 
@@ -20,7 +20,7 @@ token = None
 public_key = None
 private_key = None
 username = None
-server_pkey = None
+server_public_key = None
 session_key = None
 session_cipher = None
 session_iv = None
@@ -32,68 +32,72 @@ main_menu = [
 
 logged_in_menu = [
     ("Logout", "Logout from the account"),
-    ("Online Users", "Show online users"),
+    ("Online-Users", "Show online users"),
     ("Chat", "Chat with an online user"),
 ]
 
 logged_in = False
 
 
-def generate_nonce(length=8):
-    return ''.join([str(random.randint(0, 9)) for i in range(length)])
-
-
-def get_msg():
-    try:
-        msg = sock.recv(BUFFER_SIZE)
-        return msg
-    except Exception as e:
-        print("Error - %s" % e)
-        sys.exit(1)
-
-
 def send_msg(msg):
     sock.sendall(msg)
 
 
-def handshake():
-    global server_pkey, session_key, session_iv, session_cipher
-    session_key, session_iv, session_cipher = Encryption.symmetric_key()
-    data_to_send = {
-        "cmd": "handshake",
-        "session_iv": session_iv.decode('latin-1'),
-        "session_key": session_key.decode('latin-1'),
-        "nonce": generate_nonce(8),
-    }
+def recv_msg():
     try:
-        send_msg(Encryption.asymmetric_encrypt(data=json.dumps(data_to_send).encode('latin-1'), key=server_pkey))
-        response = json.loads(sock.recv(65536).decode('latin-1'))
-        print(response['data'])
-        if response['data']['nonce'] == data_to_send['nonce'] and Encryption.check_authority(
-                json.dumps(response['data']).encode('latin-1'),
-                response['signature'].encode('latin-1'),
-                server_pkey):
-            print("handshake was successful")
-            return True
-        return False
+        msg = sock.recv(BUFFER_SIZE)
+        return msg
     except Exception as e:
-        print(e)
-        return 0
+        print(f"Error: {e}")
+
+
+def to_json(data):
+    return json.dumps(data).encode('latin-1')
+
+
+def from_json(data):
+    return json.loads(data.decode('latin-1'))
+
+
+def generate_nonce(length=8):
+    return ''.join([str(random.randint(0, 9)) for i in range(length)])
+
+
+def handshake():
+    global server_public_key, session_key, session_iv, session_cipher
+    try:
+        session_key, session_iv, session_cipher = Encryption.symmetric_key()
+        data_to_send = {
+            "cmd": "handshake",
+            "session_key": session_key.decode('latin-1'),
+            "session_iv": session_iv.decode('latin-1'),
+            "nonce": generate_nonce(8),
+        }
+        send_msg(Encryption.asymmetric_encrypt(data=to_json(data_to_send), key=server_public_key))
+        response = from_json(Encryption.symmetric_decrypt(cipher_text=recv_msg(), cipher=session_cipher))
+        if Encryption.check_signature(response, server_public_key) \
+                and Encryption.check_nonce(response, data_to_send["nonce"]):
+            print("Handshake was successful")
+            return True
+    except Exception as e:
+        print("Handshake was failed")
+        print(f"Error: {e}")
+    return False
 
 
 def register():
-    global public_key, private_key, server_pkey, token
+    global public_key, private_key, server_public_key, token
     while True:
-        username = input("Choose a username: ")
-        password = input("Enter Password: ")
+        username = input("Enter username: ")
+        password = input("Enter password: ")
         retype_password = input("Re-type Password: ")
         if password == retype_password:
             break
         else:
-            print("Passwords do not match, try again.")
+            print("Passwords do not match, try again...")
     try:
         public_key, private_key = Encryption.generate_keys(size=1024, password=password)
-        print("generate keys")
+        print("Keys generated successfully")
         data_to_send = {
             "cmd": "register",
             "username": username,
@@ -101,73 +105,68 @@ def register():
             "public_key": Encryption.get_serialized_key(public_key).decode('latin-1'),
             "nonce": generate_nonce(8),
         }
-        msg = Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher)
-        send_msg(msg)
-        print("sent register information")
-        response = json.loads(Encryption.symmetric_decrypt(cipher_text=get_msg(), cipher=session_cipher).decode('latin-1'))
-        if Encryption.check_authority(json.dumps(response['data']).encode('latin-1'),
-                                      response['signature'].encode('latin-1'),
-                                      server_pkey):
-            if response['data']['nonce'] == data_to_send['nonce'] and response['data']['result'] == 'succ':
-                token = response['data']['token']
-                return True, "Registered Successfully"
+        send_msg(Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher))
+        response = from_json(Encryption.symmetric_decrypt(cipher_text=recv_msg(), cipher=session_cipher))
+        if Encryption.check_signature(response, server_public_key) \
+                and Encryption.check_nonce(response, data_to_send['nonce']) \
+                and response['data']['result'] == 'success':
+            token = response['data']['token']
+            return True, "Registered Successfully"
         return False, "Couldn't register to the server"
     except Exception as e:
         return False, e
 
 
 def login():
+    global public_key, private_key, server_public_key
     if logged_in:
-        return False, "already logged in"
-    global public_key, private_key, server_pkey
-    username = input("Choose a username: ")
+        return False, "Already logged in"
+    username = input("Enter username: ")
     password = input("Enter Password: ")
-    if os.path.exists("private.pem") and os.path.exists("pubkey.pem"):
-        public_key = Encryption.read_publickey_from_file("pubkey.pem")
-        try:
-            private_key = Encryption.read_privatekey_from_file("private.pem", password)
-        except Exception as e:
-            return False, "Wrong username or password"
-    else:
-        public_key, private_key = Encryption.generate_keys(size=1024, password=password)
-    data_to_send = {
-        "cmd": "login",
-        "username": username,
-        "password": password,
-        "nonce": generate_nonce(8),
-    }
-    msg = Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher)
-    send_msg(msg)
-    print("Sent login info")
-    response = json.loads(Encryption.symmetric_decrypt(cipher_text=get_msg(), cipher=session_cipher).decode('latin-1'))
-    if Encryption.check_authority(json.dumps(response['data']).encode('latin-1'),
-                                  response['signature'].encode('latin-1'),
-                                  server_pkey):
-        if response['data']['nonce'] == data_to_send['nonce'] and response['data']['result'] == 'succ':
-            return login_phase2(response)
-        return False, "Wrong username or password"
-    return False, "Invalid Signature"
+    try:
+        if os.path.exists("private_key.pem") and os.path.exists("public_key.pem"):
+            try:
+                public_key = Encryption.read_publickey_from_file("public_key.pem")
+                private_key = Encryption.read_privatekey_from_file("private_key.pem", password)
+            except Exception as e:
+                return False, "Wrong password"
+        else:
+            public_key, private_key = Encryption.generate_keys(size=1024, password=password)
+        data_to_send = {
+            "cmd": "login",
+            "username": username,
+            "password": password,
+            "nonce": generate_nonce(8),
+        }
+        send_msg(Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher))
+        response = from_json(Encryption.symmetric_decrypt(cipher_text=recv_msg(), cipher=session_cipher))
+        if Encryption.check_signature(response, server_public_key) \
+                and Encryption.check_nonce(response, data_to_send['nonce']) \
+                and response['data']['result'] == 'success':
+            return login_2nd_phase(response)
+        return False, "Invalid signature, username, or password"
+    except Exception as e:
+        return False, e
 
 
-def login_phase2(response):
+def login_2nd_phase(response):
     global token
-    nonce2 = response['data']['nonce2']
-    data_to_send = {
-        "nonce": generate_nonce(8),
-        "nonce2": nonce2,
-    }
-    msg = Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher)
-    send_msg(msg)
-    print("Sent nonce2")
-    response = json.loads(Encryption.symmetric_decrypt(cipher_text=get_msg(), cipher=session_cipher).decode('latin-1'))
-    if Encryption.check_authority(json.dumps(response['data']).encode('latin-1'),
-                                  response['signature'].encode('latin-1'),
-                                  server_pkey):
-        if response['data']['nonce'] == data_to_send['nonce'] and response['data']['result'] == 'succ':
-            token = response['data']['token']
-            return True, "Logged-In Successfully"
-        return False, "Wrong parameters!"
-    return False, "Invalid Signature"
+    try:
+        server_nonce = response['data']['server-nonce']
+        data_to_send = {
+            "nonce": generate_nonce(8),
+            "server-nonce": server_nonce,
+        }
+        send_msg(Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher))
+        response = from_json(Encryption.symmetric_decrypt(cipher_text=recv_msg(), cipher=session_cipher))
+        if Encryption.check_signature(response, server_public_key):
+            if Encryption.check_nonce(response, data_to_send['nonce']) and response['data']['result'] == 'success':
+                token = response['data']['token']
+                return True, "Logged-in successfully"
+            return False, "Wrong parameters!"
+        return False, "Invalid Signature"
+    except:
+        return False
 
 
 def logout():
@@ -175,34 +174,32 @@ def logout():
     data_to_send = {
         "cmd": "logout",
         "token": token,
-        "nonce": generate_nonce(8),
     }
-    msg = Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher)
-    send_msg(msg)
-    print("logged out successfully")
+    send_msg(Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher))
+    print("Logged out successfully")
 
 
 def show_online_users():
     global token
-    data_to_send = {
-        "cmd": "show-online-users",
-        "token": token,
-        "nonce": generate_nonce(8),
-    }
-    msg = Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher)
-    send_msg(msg)
-    response = json.loads(Encryption.symmetric_decrypt(cipher_text=get_msg(), cipher=session_cipher).decode('latin-1'))
-    if Encryption.check_authority(json.dumps(response['data']).encode('latin-1'),
-                                  response['signature'].encode('latin-1'),
-                                  server_pkey):
-        if response['data']['nonce'] == data_to_send['nonce']:
-            print(response['data']['online-users'])
+    try:
+        data_to_send = {
+            "cmd": "show-online-users",
+            "token": token,
+            "nonce": generate_nonce(8),
+        }
+        send_msg(Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher))
+        response = from_json(Encryption.symmetric_decrypt(cipher_text=recv_msg(), cipher=session_cipher))
+        if Encryption.check_signature(response, server_public_key) \
+                and Encryption.check_nonce(response, data_to_send['nonce']):
+            print(f"Online Users: {response['data']['online-users']}")
+    except Exception as e:
+        print(f"Error: {e}")
 
 
 def show_menu(commands):
-    print("\nCOMMANDS:")
+    print("\n--------------------COMMANDS--------------------")
     for i, command in enumerate(commands):
-        print(f"{i + 1}) {command[0]}: {command[1]}")
+        print(f"{i + 1}) [{command[0]}]: {command[1]}")
 
 
 def run_client_menu():
@@ -214,7 +211,7 @@ def run_client_menu():
             if command in ["1", "Logout"]:
                 logout()
                 logged_in = False
-            elif command in ["2", "Online Users"]:
+            elif command in ["2", "Online-Users"]:
                 show_online_users()
             else:
                 print("Invalid command!")
@@ -238,43 +235,24 @@ def run_client_menu():
 
 
 def init_connection():
+    global sock
     try:
-        sock.connect(('127.0.0.1', 2228))
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect(SERVER_ADDR)
         handshake_status = handshake()
         if handshake_status:
-            print("Connected to messenger server successfully )")
+            print("Connected to messenger server successfully")
             run_client_menu()
         else:
-            print("Couldn't connect to messenger server. Connection is not secure.")
+            print("Couldn't connect to messenger server")
             sock.close()
             sys.exit(1)
     except Exception as e:
-        print(e)
+        print(f"Error: {e}")
         sys.exit(1)
 
 
-def start_chat_thread(c1, a1):
-    pass
-
-
-# def listen():
-#     server_sock.bind(('127.0.0.1', 10000))
-#     server_sock.listen(10)
-#     while True:
-#         try:
-#             c1, a1 = server_sock.accept()
-#             chat_thread = threading.Thread(target=start_chat_thread, args=(c1, a1))
-#             chat_thread.daemon = True
-#             chat_thread.start()
-#         except KeyboardInterrupt:
-#             print("Program terminated by the user, see you again)")
-#             sys.exit(0)
-
-
 if __name__ == "__main__":
-    server_pkey = Encryption.read_publickey_from_file("server_public_key.pem")
-    print(server_pkey)
-    # listen_chat = threading.Thread(target=listen)
-    # listen_chat.daemon = True
-    # listen_chat.start()
+    server_public_key = Encryption.read_publickey_from_file("server_public_key.pem")
+    print("Server public key loaded successfully")
     init_connection()

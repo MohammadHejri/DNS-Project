@@ -60,8 +60,7 @@ def asymmetric_decrypt(cipher, key):
     return plaintext
 
 
-def generate_keys(size=4096, public_name='pubkey', private_name='private', password=None):
-    # generate private key & write to disk
+def generate_keys(size=4096, password=None, name=""):
     private_key = rsa.generate_private_key(
         public_exponent=65537,
         key_size=size,
@@ -72,7 +71,7 @@ def generate_keys(size=4096, public_name='pubkey', private_name='private', passw
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.BestAvailableEncryption(password.encode())
     )
-    save_file(private_name + ".pem", pem)
+    save_file("private_key" + name + ".pem", pem)
 
     # generate public key
     public_key = private_key.public_key()
@@ -80,7 +79,7 @@ def generate_keys(size=4096, public_name='pubkey', private_name='private', passw
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo
     )
-    save_file(public_name + ".pem", pem)
+    save_file("public_key" + name + ".pem", pem)
     return public_key, private_key
 
 
@@ -103,7 +102,30 @@ def sign(data_to_send, private_key):
     )
 
 
-def check_authority(data, signature, public_key):
+def check_nonce(response, nonce):
+    return response['data']['nonce'] == nonce
+
+
+def check_signature(packet, public_key):
+    try:
+        data = json.dumps(packet['data']).encode('latin-1')
+        signature = packet['signature'].encode('latin-1')
+
+        public_key.verify(
+            signature,
+            data,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
+        )
+        return True
+    except:
+        return False
+
+
+def check_signature2(data, signature, public_key):
     try:
         public_key.verify(
             signature,

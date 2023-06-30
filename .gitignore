@@ -5,3 +5,4 @@ pubkey.pem
 server_privkey.pem
 server_pubkey.pem
 users.db
+.idea

@@ -1,0 +1,9 @@
+venv
+__pycache__/
+private.pem
+pubkey.pem
+server_privkey.pem
+server_pubkey.pem
+users.db
+.idea
+client.db

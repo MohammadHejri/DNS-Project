@@ -6,6 +6,8 @@ import json
 import threading
 import os
 
+from client_db import ClientDB
+
 HOST = '127.0.0.1'
 username = ""
 password = ""
@@ -260,6 +262,7 @@ def listen():
 
 
 if __name__ == "__main__":
+    ClientDB.init()
     server_pkey = Encryption.read_publickey_from_file("server_pubkey.pem")
     print(server_pkey)
     listen_chat = threading.Thread(target=listen)

@@ -56,3 +56,5 @@ def read_clients_pubkey():
     for username, pubkey in cursor.fetchall():
         client_keys[username] = serialization.load_pem_public_key(pubkey.encode('latin-1'))
     return client_keys
+
+

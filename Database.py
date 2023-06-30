@@ -6,9 +6,7 @@ import Encryption
 
 
 def make_db():
-    if path.exists("users.db"):
-        return 1
-    else:
+    if not path.exists("users.db"):
         conn = sqlite3.connect('users.db')
         cur = conn.cursor()
         sql = ("\n"
@@ -49,9 +47,9 @@ def check_login_info(username, password):
     return rowcount > 0
 
 
-def read_clients_pubkey():
+def read_clients_public_keys():
     conn = sqlite3.connect('users.db')
-    cursor = conn.execute("SELECT * from  PubKeys")
+    cursor = conn.execute("SELECT * from PubKeys")
     client_keys = {}
     for username, pubkey in cursor.fetchall():
         client_keys[username] = serialization.load_pem_public_key(pubkey.encode('latin-1'))

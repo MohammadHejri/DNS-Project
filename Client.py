@@ -25,9 +25,17 @@ session_key = None
 session_cipher = None
 session_iv = None
 
-main_menu = {"login": "Login to an existing account", "register": "Create an account", }
-logged_in_menu = {"chat": "Chat with an online user", "online users": "Show online users",
-                  "logout": "Logout from the account"}
+main_menu = [
+    ("Register", "Create an account"),
+    ("Login", "Login to an existing account"),
+]
+
+logged_in_menu = [
+    ("Logout", "Logout from the account"),
+    ("Online Users", "Show online users"),
+    ("Chat", "Chat with an online user"),
+]
+
 logged_in = False
 
 
@@ -96,7 +104,7 @@ def register():
         msg = Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher)
         send_msg(msg)
         print("sent register information")
-        response = json.loads(Encryption.symmetric_decrypt(ct=get_msg(), cipher=session_cipher).decode('latin-1'))
+        response = json.loads(Encryption.symmetric_decrypt(cipher_text=get_msg(), cipher=session_cipher).decode('latin-1'))
         if Encryption.check_authority(json.dumps(response['data']).encode('latin-1'),
                                       response['signature'].encode('latin-1'),
                                       server_pkey):
@@ -131,7 +139,7 @@ def login():
     msg = Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher)
     send_msg(msg)
     print("Sent login info")
-    response = json.loads(Encryption.symmetric_decrypt(ct=get_msg(), cipher=session_cipher).decode('latin-1'))
+    response = json.loads(Encryption.symmetric_decrypt(cipher_text=get_msg(), cipher=session_cipher).decode('latin-1'))
     if Encryption.check_authority(json.dumps(response['data']).encode('latin-1'),
                                   response['signature'].encode('latin-1'),
                                   server_pkey):
@@ -151,7 +159,7 @@ def login_phase2(response):
     msg = Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher)
     send_msg(msg)
     print("Sent nonce2")
-    response = json.loads(Encryption.symmetric_decrypt(ct=get_msg(), cipher=session_cipher).decode('latin-1'))
+    response = json.loads(Encryption.symmetric_decrypt(cipher_text=get_msg(), cipher=session_cipher).decode('latin-1'))
     if Encryption.check_authority(json.dumps(response['data']).encode('latin-1'),
                                   response['signature'].encode('latin-1'),
                                   server_pkey):
@@ -183,7 +191,7 @@ def show_online_users():
     }
     msg = Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher)
     send_msg(msg)
-    response = json.loads(Encryption.symmetric_decrypt(ct=get_msg(), cipher=session_cipher).decode('latin-1'))
+    response = json.loads(Encryption.symmetric_decrypt(cipher_text=get_msg(), cipher=session_cipher).decode('latin-1'))
     if Encryption.check_authority(json.dumps(response['data']).encode('latin-1'),
                                   response['signature'].encode('latin-1'),
                                   server_pkey):
@@ -192,9 +200,9 @@ def show_online_users():
 
 
 def show_menu(commands):
-    print("COMMANDS:")
-    for command in commands:
-        print(command + " : " + commands[command])
+    print("\nCOMMANDS:")
+    for i, command in enumerate(commands):
+        print(f"{i + 1}) {command[0]}: {command[1]}")
 
 
 def run_client_menu():
@@ -202,32 +210,36 @@ def run_client_menu():
     while True:
         if logged_in:
             show_menu(logged_in_menu)
+            command = input("Enter command: ")
+            if command in ["1", "Logout"]:
+                logout()
+                logged_in = False
+            elif command in ["2", "Online Users"]:
+                show_online_users()
+            else:
+                print("Invalid command!")
+                continue
         else:
             show_menu(main_menu)
-        command = input("please enter the command:")
-        if command == "register":
-            res, message = register()
-            print(message)
-            if res:
-                logged_in = True
-        elif command == 'login':
-            res, message = login()
-            print(message)
-            if res:
-                logged_in = True
-        elif command == 'logout':
-            logout()
-            logged_in = False
-        elif command == 'online users':
-            show_online_users()
-        else:
-            print("Invalid command!")
-            continue
+            command = input("Enter command: ")
+            if command in ["1", "Register"]:
+                res, message = register()
+                print(message)
+                if res:
+                    logged_in = True
+            elif command in ["2", "Login"]:
+                res, message = login()
+                print(message)
+                if res:
+                    logged_in = True
+            else:
+                print("Invalid command!")
+                continue
 
 
 def init_connection():
     try:
-        sock.connect(('127.0.0.1', 2222))
+        sock.connect(('127.0.0.1', 2228))
         handshake_status = handshake()
         if handshake_status:
             print("Connected to messenger server successfully )")
@@ -245,24 +257,24 @@ def start_chat_thread(c1, a1):
     pass
 
 
-def listen():
-    server_sock.bind(('127.0.0.1', 10000))
-    server_sock.listen(10)
-    while True:
-        try:
-            c1, a1 = server_sock.accept()
-            chat_thread = threading.Thread(target=start_chat_thread, args=(c1, a1))
-            chat_thread.daemon = True
-            chat_thread.start()
-        except KeyboardInterrupt:
-            print("Program terminated by the user, see you again)")
-            sys.exit(0)
+# def listen():
+#     server_sock.bind(('127.0.0.1', 10000))
+#     server_sock.listen(10)
+#     while True:
+#         try:
+#             c1, a1 = server_sock.accept()
+#             chat_thread = threading.Thread(target=start_chat_thread, args=(c1, a1))
+#             chat_thread.daemon = True
+#             chat_thread.start()
+#         except KeyboardInterrupt:
+#             print("Program terminated by the user, see you again)")
+#             sys.exit(0)
 
 
 if __name__ == "__main__":
-    server_pkey = Encryption.read_publickey_from_file("server_pubkey.pem")
+    server_pkey = Encryption.read_publickey_from_file("server_public_key.pem")
     print(server_pkey)
-    listen_chat = threading.Thread(target=listen)
-    listen_chat.daemon = True
-    listen_chat.start()
+    # listen_chat = threading.Thread(target=listen)
+    # listen_chat.daemon = True
+    # listen_chat.start()
     init_connection()

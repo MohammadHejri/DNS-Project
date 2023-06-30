@@ -26,9 +26,9 @@ def symmetric_encrypt(cipher, plain_text):
     return encryptor.update(plain_text) + encryptor.finalize()
 
 
-def symmetric_decrypt(cipher, ct):
+def symmetric_decrypt(cipher, cipher_text):
     decryptor = cipher.decryptor()
-    return decryptor.update(ct) + decryptor.finalize()
+    return decryptor.update(cipher_text) + decryptor.finalize()
 
 
 # save file helper

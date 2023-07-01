@@ -1,6 +1,9 @@
 import socket
 import sys
 import random
+import time
+
+import Database
 import Encryption
 import json
 import threading
@@ -27,7 +30,6 @@ server_public_key = None
 session_key = None
 session_cipher = None
 session_iv = None
-database = ClientDB()
 databasePassword = None
 
 main_menu = [
@@ -250,7 +252,8 @@ def start_chat():
                 "chat_iv": chat_iv.decode('latin-1'),
                 "chat_key": chat_key.decode('latin-1'),
             }
-            chat_key_par_cipher = Encryption.asymmetric_encrypt(json.dumps(chat_key_par).encode('latin-1'), receiver_key)
+            chat_key_par_cipher = Encryption.asymmetric_encrypt(json.dumps(chat_key_par).encode('latin-1'),
+                                                                receiver_key)
             data_to_send = {
                 "cmd": "continue",
                 "seq_num": str(seq_num),
@@ -278,7 +281,7 @@ def add_msg_to_inbox(response):
         cipher_text = response['data']['cipher_text'].encode('latin-1')
         msg_text = from_json(Encryption.symmetric_decrypt(cipher=chat_cipher, cipher_text=cipher_text))
         inbox.append((response['data']['sender'], msg_text['text']))
-        database.add_new_message(msg_text['text'], response['data']['sender'], key=databasePassword)
+        Database.add_new_message(msg_text['text'], response['data']['sender'], int(time.time()), databasePassword)
 
 
 def listen():
@@ -289,7 +292,8 @@ def listen():
     msg = Encryption.asymmetric_encrypt(data=json.dumps(data_to_send).encode('latin-1'), key=server_public_key)
     listen_socket.sendall(msg)
     response = json.loads(
-        Encryption.symmetric_decrypt(cipher_text=listen_socket.recv(BUFFER_SIZE), cipher=session_cipher).decode('latin-1'))
+        Encryption.symmetric_decrypt(cipher_text=listen_socket.recv(BUFFER_SIZE), cipher=session_cipher).decode(
+            'latin-1'))
     if Encryption.check_signature(response, server_public_key):
         data_to_send = {
             "token": token,
@@ -303,11 +307,11 @@ def listen():
             response = get_chat_message()
             add_msg_to_inbox(response)
         except Exception as e:
-            print("waiting")
+            print(e)
 
 
 def run_client_menu():
-    global logged_in
+    global logged_in, databasePassword
     while True:
         if logged_in:
             show_menu(logged_in_menu)
@@ -332,6 +336,7 @@ def run_client_menu():
                 print(message)
                 if res:
                     logged_in = True
+                    databasePassword = input("Enter password for database: ")
                     listen_socket.connect(('127.0.0.1', 2232))
                     t = threading.Thread(target=listen, args=())
                     t.daemon = True
@@ -341,6 +346,7 @@ def run_client_menu():
                 print(message)
                 if res:
                     logged_in = True
+                    databasePassword = input("Enter password for database: ")
                     listen_socket.connect(('127.0.0.1', 2232))
                     t = threading.Thread(target=listen, args=())
                     t.daemon = True
@@ -371,4 +377,5 @@ def init_connection():
 if __name__ == "__main__":
     server_public_key = Encryption.read_publickey_from_file("server_public_key.pem")
     print("Server public key loaded successfully")
+    Database.make_messages_db()
     init_connection()

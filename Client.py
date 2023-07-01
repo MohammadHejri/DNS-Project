@@ -188,13 +188,14 @@ def login_2nd_phase(response):
 
 
 def logout():
-    global token
+    global token, inbox
     data_to_send = {
         "cmd": "logout",
         "token": token,
     }
     send_msg(Encryption.sign_and_encrypt(data_to_send, private_key, session_cipher))
     print("Logged out successfully")
+    inbox = []
 
 
 def show_online_users():

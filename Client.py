@@ -7,6 +7,8 @@ import threading
 import os
 from cryptography.hazmat.primitives import serialization
 
+from client_db import *
+
 SERVER_ADDR = ('127.0.0.1', 2232)
 username = ""
 password = ""
@@ -25,6 +27,8 @@ server_public_key = None
 session_key = None
 session_cipher = None
 session_iv = None
+database = ClientDB()
+databasePassword = None
 
 main_menu = [
     ("Register", "Create an account"),
@@ -97,7 +101,7 @@ def handshake():
 
 
 def register():
-    global public_key, private_key, server_public_key, token
+    global public_key, private_key, server_public_key, token, databasePassword
     while True:
         username = input("Enter username: ")
         password = input("Enter password: ")
@@ -108,8 +112,6 @@ def register():
             print("Passwords do not match, try again...")
     try:
         public_key, private_key = Encryption.generate_keys(size=4096, password=password)
-        # public_key, private_key = Encryption.generate_keys(size=4096, public_name=username + "pub",
-        #                                                    private_name=username + "priv", password=password)
         print("Keys generated successfully")
         data_to_send = {
             "cmd": "register",
@@ -124,6 +126,7 @@ def register():
                 and Encryption.check_nonce(response, data_to_send['nonce']) \
                 and response['data']['result'] == 'success':
             token = response['data']['token']
+            databasePassword = password
             return True, "Registered Successfully"
         return False, "Couldn't register to the server"
     except Exception as e:
@@ -274,7 +277,8 @@ def add_msg_to_inbox(response):
 
         cipher_text = response['data']['cipher_text'].encode('latin-1')
         msg_text = from_json(Encryption.symmetric_decrypt(cipher=chat_cipher, cipher_text=cipher_text))
-        inbox.append(msg_text['text'])
+        inbox.append((response['data']['sender'], msg_text['text']))
+        database.add_new_message(msg_text['text'], response['data']['sender'], key=databasePassword)
 
 
 def listen():

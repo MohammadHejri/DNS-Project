@@ -71,7 +71,7 @@ def generate_keys(size=4096, password=None, name=""):
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.BestAvailableEncryption(password.encode())
     )
-    save_file("private_key" + name + ".pem", pem)
+    save_file(name + "private_key.pem", pem)
 
     # generate public key
     public_key = private_key.public_key()
@@ -79,7 +79,7 @@ def generate_keys(size=4096, password=None, name=""):
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo
     )
-    save_file("public_key" + name + ".pem", pem)
+    save_file(name + "public_key.pem", pem)
     return public_key, private_key
 
 

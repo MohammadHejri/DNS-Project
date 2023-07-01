@@ -156,6 +156,7 @@ def send_chat_message(request, session_cipher, conn, addr):
                     data_to_send = {
                         "cipher_text": response['data']['cipher_text'],
                         "chat_key_par_cipher": response['data']['chat_key_par_cipher'],
+                        "sender": token_to_user[token]
                     }
                     msg = Encryption.sign_and_encrypt(data_to_send, s_private_key, users_cipher[receiver])
                     listening_clients[receiver][0].sendall(msg)
@@ -264,9 +265,7 @@ def init_server_keys():
         s_public_key = Encryption.read_publickey_from_file("server_public_key.pem")
         s_private_key = Encryption.read_privatekey_from_file("server_private_key.pem", password='admin')
     else:
-        s_public_key, s_private_key = Encryption.generate_keys(public_name="server_public_key",
-                                                               private_name="server_private_key",
-                                                               password='admin')
+        s_public_key, s_private_key = Encryption.generate_keys(size=4096, password='admin', name='server_')
 
 
 if __name__ == '__main__':
